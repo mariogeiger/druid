@@ -20,25 +20,67 @@ pub(crate) type NSModalResponse = NSInteger;
 const NSModalResponseOK: NSInteger = 1;
 const NSModalResponseCancel: NSInteger = 0;
 
+/// Gets file information when multiple files might be selected.
+/// Returns a Vec with one or more FileInfo objects, or None if the dialog was canceled.
+pub(crate) unsafe fn get_file_infos(
+    panel: id,
+    options: FileDialogOptions,
+    result: NSModalResponse,
+) -> Option<Vec<FileInfo>> {
+    if result != NSModalResponseOK {
+        return None;
+    }
+
+    // For NSOpenPanel with multiple selection, use URLs (plural)
+    if options.multi_selection {
+        let allows_multiple: bool = msg_send![panel, allowsMultipleSelection];
+        if allows_multiple {
+            // Get URLs array
+            let urls: id = msg_send![panel, URLs];
+            let count: NSInteger = msg_send![urls, count];
+
+            if count > 0 {
+                let mut file_infos = Vec::with_capacity(count as usize);
+
+                // Process all selected files
+                for i in 0..count {
+                    let url: id = msg_send![urls, objectAtIndex:i];
+                    let path: id = msg_send![url, path];
+                    let (path, format) = rewritten_path(panel, path, options.clone());
+                    let path: OsString = from_nsstring(path).into();
+                    file_infos.push(FileInfo {
+                        path: path.into(),
+                        format,
+                    });
+                }
+
+                return Some(file_infos);
+            }
+        }
+    }
+
+    // Fallback to single file selection
+    let url: id = msg_send![panel, URL];
+    if url == nil {
+        return None;
+    }
+
+    let path: id = msg_send![url, path];
+    let (path, format) = rewritten_path(panel, path, options);
+    let path: OsString = from_nsstring(path).into();
+    Some(vec![FileInfo {
+        path: path.into(),
+        format,
+    }])
+}
+
 pub(crate) unsafe fn get_file_info(
     panel: id,
     options: FileDialogOptions,
     result: NSModalResponse,
 ) -> Option<FileInfo> {
-    match result {
-        NSModalResponseOK => {
-            let url: id = msg_send![panel, URL];
-            let path: id = msg_send![url, path];
-            let (path, format) = rewritten_path(panel, path, options);
-            let path: OsString = from_nsstring(path).into();
-            Some(FileInfo {
-                path: path.into(),
-                format,
-            })
-        }
-        NSModalResponseCancel => None,
-        _ => unreachable!(),
-    }
+    // Use our new multiple file function and just take the first item if it exists
+    get_file_infos(panel, options, result).and_then(|infos| infos.into_iter().next())
 }
 
 #[allow(clippy::cognitive_complexity)]

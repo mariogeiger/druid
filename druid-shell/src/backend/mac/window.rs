@@ -1211,14 +1211,37 @@ impl WindowHandle {
         unsafe {
             let panel = dialog::build_panel(ty, opts.clone());
             let block = ConcreteBlock::new(move |response: dialog::NSModalResponse| {
-                let url = dialog::get_file_info(panel, opts.clone(), response);
                 let view = self_clone.nsview.load();
                 if let Some(view) = (*view).as_ref() {
                     let view_state: *mut c_void = *view.get_ivar("viewState");
                     let view_state = &mut *(view_state as *mut ViewState);
+
                     if ty == FileDialogType::Open {
-                        view_state.handler.open_file(token, url);
+                        // Handle multiple file selection
+                        if opts.multi_selection {
+                            if let Some(file_infos) =
+                                dialog::get_file_infos(panel, opts.clone(), response)
+                            {
+                                if file_infos.len() > 1 {
+                                    // Multiple files selected, call open_files
+                                    view_state.handler.open_files(token, file_infos);
+                                    return;
+                                } else if let Some(file_info) = file_infos.into_iter().next() {
+                                    // Only one file selected even though multi-selection was enabled
+                                    view_state.handler.open_file(token, Some(file_info));
+                                    return;
+                                }
+                            }
+                            // If we got here, dialog was cancelled
+                            view_state.handler.open_file(token, None);
+                        } else {
+                            // Single file selection case (unchanged)
+                            let url = dialog::get_file_info(panel, opts.clone(), response);
+                            view_state.handler.open_file(token, url);
+                        }
                     } else if ty == FileDialogType::Save {
+                        // Save dialog case (unchanged)
+                        let url = dialog::get_file_info(panel, opts.clone(), response);
                         view_state.handler.save_as(token, url);
                     }
                 }
